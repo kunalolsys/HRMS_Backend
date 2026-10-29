@@ -49,7 +49,7 @@ class BroadcastController extends Controller
         return response()->json(['success' => true, 'message' => 'Template deleted']);
     }
 
-    // 4. Bulk Dispatching Engine (Fully Dynamic / Automatic)
+    // 4. Bulk Dispatching Engine (100% Dynamic)
     public function dispatchBroadcast(Request $request): JsonResponse
     {
         $request->validate([
@@ -65,13 +65,13 @@ class BroadcastController extends Controller
         if ($request->channel !== 'email') {
             return response()->json([
                 'success' => false,
-                'message' => 'Third-party Gateway configuration needed for ' . strtoupper($request->channel)
+                'message' => 'Gateway configuration needed for ' . strtoupper($request->channel)
             ], 422);
         }
 
         $queuedCount = 0;
 
-        // Custom CSV Upload processing (Automatic Headers -> Keys)
+        // Custom CSV Upload Handling (Header-to-key automatic mapping)
         if ($request->target_type === 'custom') {
             if (!$request->hasFile('csv_file')) {
                 return response()->json(['success' => false, 'message' => 'CSV file is required for custom list'], 422);
@@ -79,7 +79,7 @@ class BroadcastController extends Controller
 
             $path = $request->file('csv_file')->getRealPath();
             $file = fopen($path, 'r');
-            
+
             // CSV ke top row se column headers automatically uthayega
             $headers = fgetcsv($file);
             $cleanHeaders = array_map(function ($h) {
@@ -89,7 +89,6 @@ class BroadcastController extends Controller
             while (($row = fgetcsv($file)) !== false) {
                 if (empty($row[0])) continue;
 
-                // Headers aur row values ko combine karke dynamic array banayega
                 $recipientData = array_combine($cleanHeaders, $row);
 
                 if (!empty($recipientData['email']) && filter_var($recipientData['email'], FILTER_VALIDATE_EMAIL)) {
@@ -110,14 +109,14 @@ class BroadcastController extends Controller
 
             $query->chunk(250, function ($users) use ($request, &$queuedCount) {
                 foreach ($users as $user) {
-                    // 1. User table ke saare columns (address, phone, dob, etc.) automatically uth jayenge
+                    // 1. User table ke saare columns automatically array ban jayenge
                     $recipientData = $user->toArray();
 
-                    // 2. Common frontend alias compatibility ensure karein
+                    // 2. Common frontend aliases ensure karein
                     $recipientData['employee_name'] = $user->name ?? '';
                     $recipientData['employee_code'] = $user->employee_code ?? '';
 
-                    // 3. Frontend / Dynamic Date Fallbacks
+                    // 3. Dynamic calculated fallbacks
                     $recipientData['salary_month']  = $request->salary_month ?? now()->format('F Y');
                     $recipientData['festival_name'] = $request->festival_name ?? 'Festival';
 
