@@ -1,0 +1,39 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('vendor_brands', function (Blueprint $table) {
+            $table->id(); // Primary Key           
+            $table->boolean('is_active')->default(true);
+            $table->boolean('is_delete')->default(false);
+            $table->integer('deleted_by')->nullable();
+            $table->integer('deleted_at')->nullable();
+            $table->unsignedBigInteger('vendor_id')->nullable();
+            $table->foreign('vendor_id')->references('id')->on('vendors')->nullOnDelete();
+            $table->unsignedBigInteger('brand_id')->nullable();
+            $table->foreign('brand_id')->references('id')->on('brands')->nullOnDelete();
+            $table->unsignedBigInteger('created_by')->nullable();
+            $table->unsignedBigInteger('updated_by')->nullable();
+            $table->foreign('created_by')->references('id')->on('users')->nullOnDelete();
+            $table->foreign('updated_by')->references('id')->on('users')->nullOnDelete();
+            $table->timestamps(); // created_at aur updated_at columns
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('vendor_brands');
+    }
+};
