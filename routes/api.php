@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\DivisionController;
 use App\Http\Controllers\Api\CostCenterController;
 use App\Http\Controllers\Api\VendorController;
 use App\Http\Controllers\Api\BrandController;
+use App\Http\Controllers\Api\BroadcastController;
 use App\Http\Controllers\Api\LocationController;
 use App\Http\Controllers\Api\StoreWeeklyOffController;
 use App\Http\Controllers\Api\ShiftController;
@@ -27,7 +28,9 @@ use App\Http\Controllers\Api\NoticePeriodController;
 use App\Http\Controllers\Api\EmployeeAttendanceController;
 use App\Http\Controllers\Api\HolidayController;
 use App\Http\Controllers\Api\CommunicationController;
+use App\Http\Controllers\Api\DynamicTagController;
 use Illuminate\Support\Facades\Broadcast;
+
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
@@ -72,13 +75,13 @@ Route::get('/holidays/import/errors/{filename}', [HolidayController::class, 'imp
     ->name('holidays.import.errors');
 
 Route::middleware('auth:sanctum')->group(function () {
-    
+
     // Auth related (logout)
     Route::post('/logout', [AuthController::class, 'logout']);
-    
+
     // All users fetch karne ke liye
     Route::get('/users', [UserController::class, 'index']);
-    
+
     // Single user detail ke liye (e.g., /api/users/1)
     Route::get('/users/{id}', [UserController::class, 'show']);
 
@@ -90,7 +93,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Refresh Token Route
     Route::get('/refresh-token', [AuthController::class, 'refreshToken']);
-    
+
     // Example: Kisi specific function ka route
     // Route::get('/profile', [UserController::class, 'profile']);
     // Role resource routes (CRUD)
@@ -325,4 +328,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/notifications', [CommunicationController::class, 'getNotifications']);
     Route::post('/notifications/send', [CommunicationController::class, 'sendNotification']);
     Route::post('/notifications/mark-read', [CommunicationController::class, 'markNotificationsAsRead']);
+
+    // Dynamic Tags CRUD
+    Route::get('/tags', [DynamicTagController::class, 'index']);
+    Route::post('/tags', [DynamicTagController::class, 'store']);
+    Route::put('/tags/{id}', [DynamicTagController::class, 'update']);
+    Route::delete('/tags/{id}', [DynamicTagController::class, 'destroy']);
+
+    // Templates CRUD
+    Route::get('/templates', [BroadcastController::class, 'getTemplates']);
+    Route::post('/templates', [BroadcastController::class, 'storeTemplate']);
+    Route::delete('/templates/{id}', [BroadcastController::class, 'destroyTemplate']);
+
+    // Send Broadcast
+    Route::post('/broadcast/dispatch', [BroadcastController::class, 'dispatchBroadcast']);
+
+    // History Logs
+    Route::get('/logs', [BroadcastController::class, 'getLogs']);
+    // php artisan queue:work --tries=3 --timeout=120
 });
