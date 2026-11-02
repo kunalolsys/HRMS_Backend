@@ -328,7 +328,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/notifications', [CommunicationController::class, 'getNotifications']);
     Route::post('/notifications/send', [CommunicationController::class, 'sendNotification']);
     Route::post('/notifications/mark-read', [CommunicationController::class, 'markNotificationsAsRead']);
-
+    Route::post('/notifications/{id}/mark-read', [CommunicationController::class, 'markSingleAsRead']);
     // Dynamic Tags CRUD
     Route::get('/tags', [DynamicTagController::class, 'index']);
     Route::post('/tags', [DynamicTagController::class, 'store']);

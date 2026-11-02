@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Notifications\RealTimeNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Schema;
 
 class CommunicationController extends Controller
@@ -22,79 +23,79 @@ class CommunicationController extends Controller
      * 1. Get All Conversation Messages Between Logged-in User & Partner
      * GET /api/messages/{userId}
      */
-   public function getMessages(Request $request, $userId): JsonResponse
-{
-    $targetUserId = (int) $userId;
+    public function getMessages(Request $request, $userId): JsonResponse
+    {
+        $targetUserId = (int) $userId;
 
-    // Is user se jude saare messages: jisme yeh user ya toh sender hai YA receiver hai
-    $messages = Message::with(['sender:id,name,email', 'receiver:id,name,email'])
-        ->where('sender_id', $targetUserId)
-        ->orWhere('receiver_id', $targetUserId)
-        ->orderBy('created_at', 'asc')
-        ->get();
+        // Is user se jude saare messages: jisme yeh user ya toh sender hai YA receiver hai
+        $messages = Message::with(['sender:id,name,email', 'receiver:id,name,email'])
+            ->where('sender_id', $targetUserId)
+            ->orWhere('receiver_id', $targetUserId)
+            ->orderBy('created_at', 'asc')
+            ->get();
 
-    return response()->json([
-        'success'  => true,
-        'user_id'  => $targetUserId,
-        'total'    => $messages->count(),
-        'messages' => $messages,
-        'data'     => $messages,
-    ]);
-}
+        return response()->json([
+            'success'  => true,
+            'user_id'  => $targetUserId,
+            'total'    => $messages->count(),
+            'messages' => $messages,
+            'data'     => $messages,
+        ]);
+    }
 
     /**
      * 2. Send Message & Broadcast Instantly
      * POST /api/messages/send
      */
     public function sendMessage(Request $request): JsonResponse
-{
-    // Frontend ke payload ko normalize karein
-    $receiverId = $request->input('receiver_id') ?? $request->input('user_id');
-    $messageText = $request->input('message') ?? $request->input('body');
+    {
+        // Frontend ke payload ko normalize karein
+        $receiverId = $request->input('receiver_id') ?? $request->input('user_id');
+        $messageText = $request->input('message') ?? $request->input('body');
 
-    $request->merge([
-        'receiver_id' => $receiverId !== null ? (int)$receiverId : null,
-        'message'     => $messageText,
-    ]);
+        $request->merge([
+            'receiver_id' => $receiverId !== null ? (int)$receiverId : null,
+            'message'     => $messageText,
+        ]);
 
-    $validated = $request->validate([
-        'receiver_id' => 'required|integer|exists:users,id',
-        'message'     => 'required|string|max:5000',
-    ]);
+        $validated = $request->validate([
+            'receiver_id' => 'required|integer|exists:users,id',
+            'message'     => 'required|string|max:5000',
+        ]);
 
-    $senderId = (int) $request->user()->id;
-    $targetReceiverId = (int) $validated['receiver_id'];
+        $senderId = (int) $request->user()->id;
+        $targetReceiverId = (int) $validated['receiver_id'];
 
-    // Self-message check
-    if ($senderId === $targetReceiverId) {
+        // Self-message check
+        if ($senderId === $targetReceiverId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Sender and receiver cannot be the same user.',
+                'debug'   => [
+                    'auth_sender_id' => $senderId,
+                    'target_receiver_id' => $targetReceiverId,
+                ]
+            ], 422);
+        }
+
+        $message = Message::create([
+            'sender_id'   => $senderId,
+            'receiver_id' => $targetReceiverId,
+            'message'     => $validated['message'],
+            'is_read'     => false,
+        ]);
+
+        $message->load(['sender:id,name,email', 'receiver:id,name,email']);
+
+        // Live WebSocket broadcast
+        broadcast(new MessageSent($message))->toOthers();
+
         return response()->json([
-            'success' => false,
-            'message' => 'Sender and receiver cannot be the same user.',
-            'debug'   => [
-                'auth_sender_id' => $senderId,
-                'target_receiver_id' => $targetReceiverId,
-            ]
-        ], 422);
+            'success' => true,
+            'message' => $message,
+            'data'    => $message,
+        ], 201);
     }
-
-    $message = Message::create([
-        'sender_id'   => $senderId,
-        'receiver_id' => $targetReceiverId,
-        'message'     => $validated['message'],
-        'is_read'     => false,
-    ]);
-
-    $message->load(['sender:id,name,email', 'receiver:id,name,email']);
-
-    // Live WebSocket broadcast
-    broadcast(new MessageSent($message))->toOthers();
-
-    return response()->json([
-        'success' => true,
-        'message' => $message,
-        'data'    => $message,
-    ], 201);
-}
     /**
      * 3. Send Notification to a User
      * POST /api/notifications/send
@@ -102,22 +103,23 @@ class CommunicationController extends Controller
     public function sendNotification(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'user_id'    => 'required|integer|exists:users,id',
+            'user_ids'   => 'required|array|min:1',
+            'user_ids.*' => 'integer|exists:users,id',
             'title'      => 'required|string|max:255',
-            'body'       => 'required|string|max:1000',
-            'action_url' => 'nullable|string',
+            'message'    => 'required|string|max:1000',
         ]);
 
-        $targetUser = User::findOrFail($validated['user_id']);
-        $targetUser->notify(new RealTimeNotification(
+        $notification = new RealTimeNotification(
             $validated['title'],
-            $validated['body'],
-            $validated['action_url'] ?? null
-        ));
+            $validated['message']
+        );
+
+        $users = User::whereIn('id', $validated['user_ids'])->get();
+        Notification::send($users, $notification);
 
         return response()->json([
             'success' => true,
-            'message' => 'Notification sent successfully',
+            'message' => 'Notification sent successfully to ' . $users->count() . ' user(s)',
         ], 200);
     }
 
@@ -147,6 +149,31 @@ class CommunicationController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'All notifications marked as read',
+        ], 200);
+    }
+    /**
+     * 5. Mark Single Notifications As Read
+     */
+    public function markSingleAsRead(Request $request, string $id): JsonResponse
+    {
+        $notification = $request->user()
+            ->notifications()
+            ->where('id', $id)
+            ->first();
+
+        if (! $notification) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Notification not found',
+            ], 404);
+        }
+
+        $notification->markAsRead();
+
+        return response()->json([
+            'success'      => true,
+            'message'      => 'Notification marked as read',
+            'unread_count' => $request->user()->unreadNotifications()->count(),
         ], 200);
     }
 }
