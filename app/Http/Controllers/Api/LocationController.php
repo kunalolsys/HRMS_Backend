@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\LocationExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\LocationImport;
 use App\Models\CostCenter;
 use App\Models\Employee;
@@ -18,6 +19,19 @@ use Illuminate\Validation\Validator as ValidatorContract;
 
 class LocationController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
+        $this->middleware('permission:location-view|location-create|location-edit|location-delete', ['only' => ['index', 'show']]);
+        $this->middleware('permission:location-create', ['only' => ['store']]);
+        $this->middleware('permission:location-edit', ['only' => ['update']]);
+        $this->middleware('permission:location-delete', ['only' => ['destroy']]);
+        $this->middleware('permission:location-restore', ['only' => ['restore']]);
+        $this->middleware('permission:location-export', ['only' => ['export']]);
+        $this->middleware('permission:location-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
+    }
     public function import(Request $request)
     {
         $templateUrl = route('locations.import.template');
@@ -35,7 +49,7 @@ class LocationController extends Controller
                     'imported' => $imported,
                     'failed' => count($locationImport->errors()),
                     'errors' => $locationImport->errors(),
-                    'errors_url' => route('locations.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url' => $this->generateImportErrorsUrl('locations.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

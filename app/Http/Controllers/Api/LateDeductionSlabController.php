@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\LateDeductionSlabExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\LateDeductionSlabImport;
 use App\Models\LateDeductionSlab;
 use Exception;
@@ -16,17 +17,18 @@ use Illuminate\Support\Facades\Validator;
 
 class LateDeductionSlabController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
 
     public function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:late_deduction_slab-view|late_deduction_slab-create|late_deduction_slab-edit|late_deduction_slab-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:late_deduction_slab-create', ['only' => ['store']]);
         $this->middleware('permission:late_deduction_slab-edit', ['only' => ['update']]);
         $this->middleware('permission:late_deduction_slab-delete', ['only' => ['destroy']]);
         $this->middleware('permission:late_deduction_slab-restore', ['only' => ['restore']]);
         $this->middleware('permission:late_deduction_slab-export', ['only' => ['export']]);
-        $this->middleware('permission:late_deduction_slab-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:late_deduction_slab-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
 
     /**
@@ -58,7 +60,7 @@ class LateDeductionSlabController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($import->errors()),
                     'errors'       => $import->errors(),
-                    'errors_url'   => route('late-deduction-slabs.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('late-deduction-slabs.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

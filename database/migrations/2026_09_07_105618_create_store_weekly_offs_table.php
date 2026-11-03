@@ -17,7 +17,7 @@ return new class extends Migration
             $table->boolean('is_delete')->default(false);
             $table->integer('deleted_by')->nullable();
             $table->dateTime('deleted_at')->nullable();
-            $table->integer('location_id')->nullable();
+            $table->unsignedBigInteger('location_id')->nullable();
             $table->string('weekly_off_day')->nullable();
             $table->foreign('location_id')->references('id')->on('locations')->onDelete('set null');
             $table->unsignedBigInteger('created_by')->nullable();

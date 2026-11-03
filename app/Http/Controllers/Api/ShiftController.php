@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\ShiftExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\ShiftImport;
 use App\Models\Shift;
 use Illuminate\Contracts\Validation\Validator as ValidatorContract;
@@ -17,6 +18,20 @@ use Illuminate\Validation\Rule;
 
 class ShiftController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
+        $this->middleware('permission:shift-view|shift-create|shift-edit|shift-delete', ['only' => ['index', 'show']]);
+        $this->middleware('permission:shift-create', ['only' => ['store']]);
+        $this->middleware('permission:shift-edit', ['only' => ['update']]);
+        $this->middleware('permission:shift-delete', ['only' => ['destroy']]);
+        $this->middleware('permission:shift-restore', ['only' => ['restore']]);
+        $this->middleware('permission:shift-export', ['only' => ['export']]);
+        $this->middleware('permission:shift-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
+    }
+
     /**
      * Import shifts from a CSV file.
      */
@@ -46,7 +61,7 @@ class ShiftController extends Controller
                     'imported' => $imported,
                     'failed' => count($shiftImport->errors()),
                     'errors' => $shiftImport->errors(),
-                    'errors_url' => route('shifts.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url' => $this->generateImportErrorsUrl('shifts.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

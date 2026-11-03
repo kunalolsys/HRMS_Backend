@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\HolidayExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\HolidayImport;
 use App\Models\Holiday;
 use Illuminate\Http\JsonResponse;
@@ -14,16 +15,18 @@ use Illuminate\Validation\Rule;
 
 class HolidayController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
     public function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:holiday-view|holiday-create|holiday-edit|holiday-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:holiday-create', ['only' => ['store']]);
         $this->middleware('permission:holiday-edit', ['only' => ['update']]);
         $this->middleware('permission:holiday-delete', ['only' => ['destroy']]);
         $this->middleware('permission:holiday-restore', ['only' => ['restore']]);
         $this->middleware('permission:holiday-export', ['only' => ['export']]);
-        $this->middleware('permission:holiday-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:holiday-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
 
     /**
@@ -59,7 +62,7 @@ class HolidayController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($holidayImport->errors()),
                     'errors'       => $holidayImport->errors(),
-                    'errors_url'   => route('holidays.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('holidays.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }
@@ -160,7 +163,7 @@ class HolidayController extends Controller
                 ->with(['createdBy:id,name', 'updatedBy:id,name'])
                 ->where('is_delete', $showTrashed)
                 ->when($search !== '', function ($q) use ($search): void {
-                    $q->where(function ($sub): void {
+                    $q->where(function ($sub) use ($search): void {
                         $sub->whereRaw('LOWER(holiday_title) LIKE ?', ["%{$search}%"])
                             ->orWhereRaw('LOWER(holiday_type) LIKE ?', ["%{$search}%"]);
                     });
@@ -228,7 +231,6 @@ class HolidayController extends Controller
                 'required',
                 'date_format:Y-m-d',
                 Rule::unique('holidays', 'holiday_date')
-                    ->where(fn ($q) => $q->where('is_delete', false)),
             ],
             'holiday_title' => ['required', 'string', 'max:255'],
             'holiday_type'  => ['required', Rule::in(['full day', 'half day'])],
@@ -320,8 +322,7 @@ class HolidayController extends Controller
                 'required',
                 'date_format:Y-m-d',
                 Rule::unique('holidays', 'holiday_date')
-                    ->ignore($holiday->id)
-                    ->where(fn ($q) => $q->where('is_delete', false)),
+                    ->ignore($holiday->id),
             ],
             'holiday_title' => ['sometimes', 'required', 'string', 'max:255'],
             'holiday_type'  => ['sometimes', 'required', Rule::in(['full day', 'half day'])],

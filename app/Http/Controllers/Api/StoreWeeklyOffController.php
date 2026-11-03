@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\StoreWeeklyOffExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\StoreWeeklyOffImport;
 use App\Models\Employee;
 use App\Models\StoreWeeklyOff;
@@ -17,6 +18,18 @@ use Illuminate\Validation\Rule;
 
 class StoreWeeklyOffController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
+        $this->middleware('permission:store_weekly-view|store_weekly-create|store_weekly-edit|store_weekly-delete', ['only' => ['index', 'show']]);        
+        $this->middleware('permission:store_weekly-store', ['only' => ['create']]);
+        $this->middleware('permission:store_weekly-edit', ['only' => ['update']]);  
+        $this->middleware('permission:store_weekly-delete', ['only' => ['destroy']]);
+        $this->middleware('permission:store_weekly-restore', ['only' => ['restore']]);
+        $this->middleware('permission:store_weekly-export', ['only' => ['export']]);
+        $this->middleware('permission:store_weekly-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
+    }
     /**
      * Import store weekly offs from a CSV file.
      */
@@ -46,7 +59,7 @@ class StoreWeeklyOffController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($storeWeeklyOffImport->errors()),
                     'errors'       => $storeWeeklyOffImport->errors(),
-                    'errors_url'   => route('store-weekly-offs.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('store-weekly-offs.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

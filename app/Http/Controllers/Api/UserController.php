@@ -12,6 +12,17 @@ use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
+        $this->middleware('permission:user-view|user-create|user-edit|user-delete', ['only' => ['index', 'show']]);        
+        $this->middleware('permission:user-edit', ['only' => ['update']]);  
+        $this->middleware('permission:user-delete', ['only' => ['destroy']]);
+        $this->middleware('permission:user-restore', ['only' => ['restore']]);
+        $this->middleware('permission:user-export', ['only' => ['export']]);
+        $this->middleware('permission:user-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
+    }
+
     // Sabhi users ka data fetch karne ke liye
     public function index(Request $request)
     {

@@ -12,6 +12,15 @@ use Illuminate\Validation\Rule;
 
 class DepartmentController extends Controller
 {
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum');
+        $this->middleware('permission:department-view|department-create|department-edit|department-delete', ['only' => ['index', 'show']]);
+        $this->middleware('permission:department-create', ['only' => ['store']]);
+        $this->middleware('permission:department-edit', ['only' => ['update']]);
+        $this->middleware('permission:department-delete', ['only' => ['destroy']]);
+    }
+
     /**
      * Display a listing of the resource.
      */

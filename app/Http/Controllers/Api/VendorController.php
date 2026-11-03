@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\VendorExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\VendorImport;
 use App\Models\Employee;
 use App\Models\Vendor;
@@ -16,6 +17,20 @@ use Illuminate\Validation\Validator as ValidatorContract;
 
 class VendorController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
+        $this->middleware('permission:vendor-view|vendor-create|vendor-edit|vendor-delete', ['only' => ['index', 'show']]);
+        $this->middleware('permission:vendor-create', ['only' => ['store']]);
+        $this->middleware('permission:vendor-edit', ['only' => ['update']]);
+        $this->middleware('permission:vendor-delete', ['only' => ['destroy']]);
+        $this->middleware('permission:vendor-restore', ['only' => ['restore']]);
+        $this->middleware('permission:vendor-export', ['only' => ['export']]);
+        $this->middleware('permission:vendor-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
+    }
+
     public function import(Request $request)
     {
         $templateUrl = route('vendors.import.template');
@@ -33,7 +48,7 @@ class VendorController extends Controller
                     'imported' => $imported,
                     'failed' => count($vendorImport->errors()),
                     'errors' => $vendorImport->errors(),
-                    'errors_url' => route('vendors.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url' => $this->generateImportErrorsUrl('vendors.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\ShortLeaveDeductionSlabExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\ShortLeaveDeductionSlabImport;
 use App\Models\ShortLeaveDeductionSlab;
 use Exception;
@@ -16,6 +17,20 @@ use Illuminate\Support\Facades\Validator;
 
 class ShortLeaveDeductionSlabController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
+        $this->middleware('permission:short_leave_deduction_slab-view|short_leave_deduction_slab-create|short_leave_deduction_slab-edit|short_leave_deduction_slab-delete', ['only' => ['index', 'show']]);
+        $this->middleware('permission:short_leave_deduction_slab-create', ['only' => ['store']]);
+        $this->middleware('permission:short_leave_deduction_slab-edit', ['only' => ['update']]);
+        $this->middleware('permission:short_leave_deduction_slab-delete', ['only' => ['destroy']]);
+        $this->middleware('permission:short_leave_deduction_slab-restore', ['only' => ['restore']]);
+        $this->middleware('permission:short_leave_deduction_slab-export', ['only' => ['export']]);
+        $this->middleware('permission:short_leave_deduction_slab-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
+    }
+
     /**
      * Import short leave deduction slabs from a CSV file.
      */
@@ -45,7 +60,7 @@ class ShortLeaveDeductionSlabController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($import->errors()),
                     'errors'       => $import->errors(),
-                    'errors_url'   => route('short-leave-deduction-slabs.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('short-leave-deduction-slabs.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

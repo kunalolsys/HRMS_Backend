@@ -13,11 +13,13 @@ use App\Http\Controllers\Api\CostCenterController;
 use App\Http\Controllers\Api\VendorController;
 use App\Http\Controllers\Api\BrandController;
 use App\Http\Controllers\Api\BroadcastController;
+use App\Http\Controllers\Api\CommunicationController;
 use App\Http\Controllers\Api\LocationController;
 use App\Http\Controllers\Api\StoreWeeklyOffController;
 use App\Http\Controllers\Api\ShiftController;
 use App\Http\Controllers\Api\DesignationController;
 use App\Http\Controllers\Api\DropdownController;
+use App\Http\Controllers\Api\DynamicTagController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\PermissionAssignmentController;
 use App\Http\Controllers\Api\LateDeductionSlabController;
@@ -26,9 +28,9 @@ use App\Http\Controllers\Api\StatutoryParameterMasterController;
 use App\Http\Controllers\Api\MinimumWageMasterController;
 use App\Http\Controllers\Api\NoticePeriodController;
 use App\Http\Controllers\Api\EmployeeAttendanceController;
+use App\Http\Controllers\Api\PayrollController;
 use App\Http\Controllers\Api\HolidayController;
-use App\Http\Controllers\Api\CommunicationController;
-use App\Http\Controllers\Api\DynamicTagController;
+use App\Http\Controllers\Api\SalaryBifurcationController;
 use Illuminate\Support\Facades\Broadcast;
 
 Route::get('/user', function (Request $request) {
@@ -38,41 +40,62 @@ Route::get('/user', function (Request $request) {
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 Broadcast::routes(['middleware' => ['auth:sanctum']]);
+
 // Import Error Routes
 Route::get('/brands/import/errors/{filename}', [BrandController::class, 'importErrors'])
-    ->name('brands.import.errors');
+    ->name('brands.import.errors')
+    ->middleware('signed');
 Route::get('/vendors/import/errors/{filename}', [VendorController::class, 'importErrors'])
-    ->name('vendors.import.errors');
+    ->name('vendors.import.errors')
+    ->middleware('signed');
 Route::get('/locations/import/errors/{filename}', [LocationController::class, 'importErrors'])
-    ->name('locations.import.errors');
+    ->name('locations.import.errors')
+    ->middleware('signed');
 Route::get('/cost-centers/import/errors/{filename}', [CostCenterController::class, 'importErrors'])
-    ->name('cost-centers.import.errors');
+    ->name('cost-centers.import.errors')
+    ->middleware('signed');
 Route::get('/companies/import/errors/{filename}', [CompanyController::class, 'importErrors'])
-    ->name('companies.import.errors');
+    ->name('companies.import.errors')
+    ->middleware('signed');
 Route::get('/divisions/import/errors/{filename}', [DivisionController::class, 'importErrors'])
-    ->name('divisions.import.errors');
+    ->name('divisions.import.errors')
+    ->middleware('signed');
 Route::get('/shifts/import/errors/{filename}', [ShiftController::class, 'importErrors'])
-    ->name('shifts.import.errors');
+    ->name('shifts.import.errors')
+    ->middleware('signed');
 Route::get('/designations/import/errors/{filename}', [DesignationController::class, 'importErrors'])
-    ->name('designations.import.errors');
+    ->name('designations.import.errors')
+    ->middleware('signed');
 Route::get('/employees/import/errors/{filename}', [EmployeeController::class, 'importErrors'])
-    ->name('employees.import.errors');
+    ->name('employees.import.errors')
+    ->middleware('signed');
 Route::get('/store-weekly-offs/import/errors/{filename}', [StoreWeeklyOffController::class, 'importErrors'])
-    ->name('store-weekly-offs.import.errors');
+    ->name('store-weekly-offs.import.errors')
+    ->middleware('signed');
 Route::get('/late-deduction-slabs/import/errors/{filename}', [LateDeductionSlabController::class, 'importErrors'])
-    ->name('late-deduction-slabs.import.errors');
+    ->name('late-deduction-slabs.import.errors')
+    ->middleware('signed');
 Route::get('/short-leave-deduction-slabs/import/errors/{filename}', [ShortLeaveDeductionSlabController::class, 'importErrors'])
-    ->name('short-leave-deduction-slabs.import.errors');
+    ->name('short-leave-deduction-slabs.import.errors')
+    ->middleware('signed');
 Route::get('/statutory-parameter-masters/import/errors/{filename}', [StatutoryParameterMasterController::class, 'importErrors'])
-    ->name('statutory-parameter-masters.import.errors');
+    ->name('statutory-parameter-masters.import.errors')
+    ->middleware('signed');
 Route::get('/minimum-wage-masters/import/errors/{filename}', [MinimumWageMasterController::class, 'importErrors'])
-    ->name('minimum-wage-masters.import.errors');
+    ->name('minimum-wage-masters.import.errors')
+    ->middleware('signed');
 Route::get('/notice-periods/import/errors/{filename}', [NoticePeriodController::class, 'importErrors'])
-    ->name('notice-periods.import.errors');
+    ->name('notice-periods.import.errors')
+    ->middleware('signed');
 Route::get('/employee-attendances/import/errors/{filename}', [EmployeeAttendanceController::class, 'importErrors'])
-    ->name('employee-attendances.import.errors');
+    ->name('employee-attendances.import.errors')
+    ->middleware('signed');
 Route::get('/holidays/import/errors/{filename}', [HolidayController::class, 'importErrors'])
-    ->name('holidays.import.errors');
+    ->name('holidays.import.errors')
+    ->middleware('signed');
+Route::get('/salary-bifurcations/import/errors/{filename}', [SalaryBifurcationController::class, 'importErrors'])
+    ->name('salary-bifurcations.import.errors')
+    ->middleware('signed');
 
 Route::middleware('auth:sanctum')->group(function () {
 
@@ -299,6 +322,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/employee-attendances/{employeeAttendance}/get-working-hours', [EmployeeAttendanceController::class, 'recalculateWorkingHours']);
     Route::apiResource('employee-attendances', EmployeeAttendanceController::class);
 
+    // Salary Bifurcation resource routes (CRUD)
+    Route::post('/salary-bifurcations/import', [SalaryBifurcationController::class, 'import']);
+    Route::get('/salary-bifurcations/import/structure', [SalaryBifurcationController::class, 'importStructure'])
+        ->name('salary-bifurcations.import.structure');
+    Route::get('/salary-bifurcations/import/template', [SalaryBifurcationController::class, 'importTemplate'])
+        ->name('salary-bifurcations.import.template');
+    Route::get('/salary-bifurcations/export', [SalaryBifurcationController::class, 'export']);
+    Route::post('/salary-bifurcations/{id}/restore', [SalaryBifurcationController::class, 'restore']);
+    Route::apiResource('salary-bifurcations', SalaryBifurcationController::class);
+
     // Dropdown data routes
     Route::get('/dropdowns/brands', [DropdownController::class, 'brands']);
     Route::get('/dropdowns/divisions', [DropdownController::class, 'divisions']);
@@ -320,6 +353,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/dropdowns/all', [DropdownController::class, 'all']);
     Route::get('/usersbyroles/{id}/users', [DropdownController::class, 'getUsers']);
 
+    // Payroll Management & Statutory Challan Routes
+    Route::post('/payroll/attendance-excel', [PayrollController::class, 'uploadAttendanceExcel']);
+    Route::post('/payroll/interim-csv', [PayrollController::class, 'uploadInterimCsv']);
+    Route::post('/payroll/run', [PayrollController::class, 'runPayroll']);
+    Route::get('/payroll/status', [PayrollController::class, 'getPayrollStatus']);
+    Route::post('/payroll/lock', [PayrollController::class, 'lockPayrollPeriod']);
+    Route::get('/payroll/statutory-challan-summary', [PayrollController::class, 'downloadStatutoryChallanSummary'])
+        ->name('payroll.statutory-challan-summary');
+    Route::get('/payroll/esic-contribution', [PayrollController::class, 'downloadEsicContribution'])
+        ->name('payroll.esic-contribution');
+
     // Chat endpoints
     Route::get('/messages/{userId}', [CommunicationController::class, 'getMessages']);
     Route::post('/messages/send', [CommunicationController::class, 'sendMessage']);
@@ -329,6 +373,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/notifications/send', [CommunicationController::class, 'sendNotification']);
     Route::post('/notifications/mark-read', [CommunicationController::class, 'markNotificationsAsRead']);
     Route::post('/notifications/{id}/mark-read', [CommunicationController::class, 'markSingleAsRead']);
+
     // Dynamic Tags CRUD
     Route::get('/tags', [DynamicTagController::class, 'index']);
     Route::post('/tags', [DynamicTagController::class, 'store']);
@@ -345,5 +390,4 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // History Logs
     Route::get('/logs', [BroadcastController::class, 'getLogs']);
-    // php artisan queue:work --tries=3 --timeout=120
 });

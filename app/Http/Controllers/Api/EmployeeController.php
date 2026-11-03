@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\EmployeeExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\EmployeeImport;
 use App\Models\Brand;
 use App\Models\Company;
@@ -39,14 +40,14 @@ class EmployeeController extends Controller
 
     public function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:employee-view|employee-create|employee-edit|employee-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:employee-create', ['only' => ['store']]);
         $this->middleware('permission:employee-edit', ['only' => ['update']]);
         $this->middleware('permission:employee-delete', ['only' => ['destroy']]);
         $this->middleware('permission:employee-restore', ['only' => ['restore']]);
         $this->middleware('permission:employee-export', ['only' => ['export']]);
-        $this->middleware('permission:employee-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:employee-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
 
     /**
@@ -336,7 +337,7 @@ class EmployeeController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($import->errors()),
                     'errors'       => $import->errors(),
-                    'errors_url'   => route('employees.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('employees.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Traits\HandlesDuplicateNameValidation;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Exports\BrandExport;
 use App\Imports\BrandImport;
 use App\Models\Brand;
@@ -22,18 +23,18 @@ use Illuminate\Support\Facades\Storage;
 
 class BrandController extends Controller
 {
-    use HandlesDuplicateNameValidation;
+    use HandlesDuplicateNameValidation, GeneratesSignedImportErrorUrl;
 
     function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:brand-view|brand-create|brand-edit|brand-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:brand-create', ['only' => ['store']]);
         $this->middleware('permission:brand-edit', ['only' => ['update']]);
         $this->middleware('permission:brand-delete', ['only' => ['destroy']]);
         $this->middleware('permission:brand-restore', ['only' => ['restore']]);
         $this->middleware('permission:brand-export', ['only' => ['export']]);
-        $this->middleware('permission:brand-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:brand-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
     /**
      * Import brands from a CSV file.
@@ -64,9 +65,7 @@ class BrandController extends Controller
                     'imported' => $imported,
                     'failed' => count($brandImport->errors()),
                     'errors' => $brandImport->errors(),
-                    'errors_url' => route('brands.import.errors', [
-                        'filename' => basename($errorFile),
-                    ]),
+                    'errors_url' => $this->generateImportErrorsUrl('brands.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

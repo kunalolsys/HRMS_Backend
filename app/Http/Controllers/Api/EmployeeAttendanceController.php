@@ -3,11 +3,14 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Exports\EmployeeAttendanceExport;
 use App\Imports\EmployeeAttendanceImport;
 use App\Models\Employee;
 use App\Models\EmployeeAttendance;
 use App\Models\EmployeeAttendanceDetail;
+use App\Models\Holiday;
+use App\Models\StoreWeeklyOff;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,16 +21,18 @@ use Illuminate\Validation\Rule;
 
 class EmployeeAttendanceController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
     public function __construct()
     {
-        $this->middleware('auth:sanctum');
-        $this->middleware('permission:employee-attendance-view|employee-attendance-create|employee-attendance-edit|employee-attendance-delete', ['only' => ['index', 'show']]);
-        $this->middleware('permission:employee-attendance-create', ['only' => ['store']]);
-        $this->middleware('permission:employee-attendance-edit',   ['only' => ['update']]);
-        $this->middleware('permission:employee-attendance-delete', ['only' => ['destroy']]);
-        $this->middleware('permission:employee-attendance-restore',['only' => ['restore']]);
-        $this->middleware('permission:employee-attendance-export', ['only' => ['export']]);
-        $this->middleware('permission:employee-attendance-import', ['only' => ['import', 'importTemplate', 'downloadTemplate', 'importStructure','importErrors']]);
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
+        $this->middleware('permission:employee_attendance-view|employee_attendance-create|employee_attendance-edit|employee_attendance-delete', ['only' => ['index', 'show']]);
+        $this->middleware('permission:employee_attendance-create', ['only' => ['store']]);
+        $this->middleware('permission:employee_attendance-edit',   ['only' => ['update']]);
+        $this->middleware('permission:employee_attendance-delete', ['only' => ['destroy']]);
+        $this->middleware('permission:employee_attendance-restore',['only' => ['restore']]);
+        $this->middleware('permission:employee_attendance-export', ['only' => ['export']]);
+        $this->middleware('permission:employee_attendance-import', ['only' => ['import', 'importTemplate', 'downloadTemplate', 'importStructure']]);
     }
 
     /**
@@ -66,6 +71,16 @@ class EmployeeAttendanceController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        if ($request->has('punches') && is_array($request->input('punches'))) {
+            $punches = array_values($request->input('punches'));
+            if (isset($punches[0]['punch_time']) && !$request->filled('in_time')) {
+                $request->merge(['in_time' => $punches[0]['punch_time']]);
+            }
+            if (isset($punches[1]['punch_time']) && !$request->filled('out_time')) {
+                $request->merge(['out_time' => $punches[1]['punch_time']]);
+            }
+        }
+
         $validator = Validator::make($request->all(), [
             'employee_id' => 'required|integer|exists:employees,id',
             'attendance_date' => 'required|date',
@@ -90,6 +105,48 @@ class EmployeeAttendanceController extends Controller
                 return;
             }
 
+            // 1. Employee Validation (Moved up for better performance)
+            $employee = Employee::withTrashed()->with(['shift', 'location'])->find($request->input('employee_id'));
+
+            if (!$employee || $employee->trashed() || (bool) $employee->is_delete) {
+                $validator->errors()->add('employee_id', 'The selected employee has been deleted.');
+                return;
+            }
+
+            if (!(bool) $employee->is_active) {
+                $validator->errors()->add('employee_id', 'The selected employee is inactive and cannot have attendance recorded.');
+                return;
+            }
+
+            if (!empty($employee->date_of_join) && Carbon::parse($attendanceDate)->lt(Carbon::parse($employee->date_of_join))) {
+                $validator->errors()->add('attendance_date', "Attendance date '{$attendanceDate}' is before the employee's date of join ({$employee->date_of_join}).");
+                return;
+            }
+
+            if (!empty($employee->date_of_leave) && Carbon::parse($attendanceDate)->gt(Carbon::parse($employee->date_of_leave))) {
+                $validator->errors()->add('attendance_date', "Attendance date '{$attendanceDate}' is after the employee's date of leave ({$employee->date_of_leave}).");
+                return;
+            }
+
+            // 2. Weekly Off Check
+            if ($this->isEmployeeWeeklyOff($employee, $attendanceDate)) {
+                $dayOfWeek = Carbon::parse($attendanceDate)->format('l');
+                $validator->errors()->add('attendance_date', "Attendance cannot be marked on the employee's weekly off day ({$dayOfWeek}).");
+                return;
+            }
+
+            // 3. Holiday Check (FIXED: Allow half-day holidays to pass through)
+            $holiday = Holiday::where('is_delete', false)
+                ->where('is_active', true)
+                ->whereDate('holiday_date', $attendanceDate)
+                ->first();
+
+            if ($holiday && $holiday->holiday_type !== 'half day') {
+                $validator->errors()->add('attendance_date', "Attendance cannot be marked on a full-day holiday ({$holiday->holiday_title}).");
+                return;
+            }
+
+            // 4. Time Parsing & Checks
             $inCarbon = $this->parseDateTime($attendanceDate, $request->input('in_time'));
             $outCarbon = $this->parseDateTime($attendanceDate, $request->input('out_time'));
 
@@ -103,51 +160,108 @@ class EmployeeAttendanceController extends Controller
                 return;
             }
 
-            // Auto-advance out_time to next day if it's an overnight shift and date was not explicitly passed
-            if ($outCarbon->lte($inCarbon) && !preg_match('/^\d{4}-\d{2}-\d{2}/', trim($request->input('out_time')))) {
+            // Duplicate punch: in_time and out_time cannot be identical
+            if ($inCarbon->eq($outCarbon)) {
+                $validator->errors()->add('out_time', "Duplicate punch: in_time and out_time cannot be identical ({$inCarbon->format('H:i:s')}).");
+                return;
+            }
+
+            // Auto-advance out_time to next day if it's an overnight shift
+            if ($outCarbon->lt($inCarbon) && !preg_match('/^\d{4}-\d{2}-\d{2}/', trim($request->input('out_time')))) {
                 $outCarbon->addDay();
             }
 
             if ($outCarbon->lte($inCarbon)) {
                 $validator->errors()->add('out_time', 'The out_time must be greater than in_time.');
+                return;
             }
 
+            // 5. Existing Punches Validation
             $existingAttendance = EmployeeAttendance::where('employee_id', $request->input('employee_id'))
-                ->where('attendance_date', $attendanceDate)
+                ->whereDate('attendance_date', $attendanceDate)
                 ->first();
 
             if ($existingAttendance) {
-                $lastDetail = $existingAttendance->details()
-                    ->orderBy('in_out_time', 'desc')
-                    ->first();
+                $existingDetails = $existingAttendance->details()->get();
 
-                if ($lastDetail) {
-                    $lastPunchTime = Carbon::parse($lastDetail->in_out_time);
-                    if ($inCarbon->lte($lastPunchTime)) {
+                $existingPunches = $existingDetails
+                    ->map(fn ($d) => Carbon::parse($d->in_out_time)->format('Y-m-d H:i:s'))
+                    ->all();
+                $existingPunchTimes = $existingDetails
+                    ->map(fn ($d) => Carbon::parse($d->in_out_time)->format('H:i:s'))
+                    ->all();
+
+                $formattedIn = $inCarbon->format('Y-m-d H:i:s');
+                $formattedOut = $outCarbon->format('Y-m-d H:i:s');
+                $timeIn = $inCarbon->format('H:i:s');
+                $timeOut = $outCarbon->format('H:i:s');
+
+                $inExists = in_array($formattedIn, $existingPunches, true) || in_array($timeIn, $existingPunchTimes, true);
+                $outExists = in_array($formattedOut, $existingPunches, true) || in_array($timeOut, $existingPunchTimes, true);
+
+                if ($inExists && $outExists) {
+                    $validator->errors()->add('in_time', "Duplicate punch: Both in_time ({$timeIn}) and out_time ({$timeOut}) already exist on date {$attendanceDate}.");
+                    $validator->errors()->add('out_time', "Duplicate punch: Both in_time ({$timeIn}) and out_time ({$timeOut}) already exist on date {$attendanceDate}.");
+                } elseif ($inExists) {
+                    $validator->errors()->add('in_time', "Duplicate punch: in_time ({$timeIn}) already exists on date {$attendanceDate}.");
+                } elseif ($outExists) {
+                    $validator->errors()->add('out_time', "Duplicate punch: out_time ({$timeOut}) already exists on date {$attendanceDate}.");
+                }
+
+                if (!$inExists && !$outExists) {
+                    $lastDetail = $existingDetails->sortByDesc('in_out_time')->first();
+
+                    if ($lastDetail) {
+                        $lastPunchTime = Carbon::parse($lastDetail->in_out_time);
+                        if ($inCarbon->lte($lastPunchTime)) {
+                            $validator->errors()->add(
+                                'in_time',
+                                $inCarbon->eq($lastPunchTime)
+                                    ? "Duplicate punch: in_time ({$inCarbon->format('H:i:s')}) is identical to the last recorded punch time."
+                                    : "New in_time ({$inCarbon->format('H:i:s')}) must be greater than the last recorded punch time ({$lastPunchTime->format('H:i:s')})."
+                            );
+                        }
+                    }
+                }
+            }
+
+            // 6. Shift Bounds & Half-Day Hours Limit Validation
+            $shiftBounds = $this->getShiftBounds($employee, $attendanceDate);
+            if ($shiftBounds && $inCarbon && $outCarbon) {
+                [$shiftStart, $shiftEnd] = $shiftBounds;
+                if ($inCarbon->lt($shiftStart) || $inCarbon->gt($shiftEnd)) {
+                    $validator->errors()->add(
+                        'in_time',
+                        "The in_time must be within the assigned shift ({$shiftStart->format('Y-m-d H:i:s')} - {$shiftEnd->format('Y-m-d H:i:s')})."
+                    );
+                }
+                if ($outCarbon->lt($shiftStart) || $outCarbon->gt($shiftEnd)) {
+                    $validator->errors()->add(
+                        'out_time',
+                        "The out_time must be within the assigned shift ({$shiftStart->format('Y-m-d H:i:s')} - {$shiftEnd->format('Y-m-d H:i:s')})."
+                    );
+                }
+
+                $maxShiftMinutes = (int) $shiftStart->diffInMinutes($shiftEnd);
+                $workedMinutes = (int) $inCarbon->diffInMinutes($outCarbon);
+
+                if ($holiday && $holiday->holiday_type === 'half day') {
+                    $halfDayMaxMinutes = (int) ($maxShiftMinutes / 2);
+                    if ($workedMinutes > $halfDayMaxMinutes) {
+                        $halfHoursStr = sprintf('%02d:%02d', intdiv($halfDayMaxMinutes, 60), $halfDayMaxMinutes % 60);
                         $validator->errors()->add(
-                            'in_time',
-                            "New in_time ({$inCarbon->format('H:i:s')}) must be greater than the last recorded punch time ({$lastPunchTime->format('H:i:s')})."
+                            'out_time',
+                            "On a half-day holiday ({$holiday->holiday_title}), total duration cannot exceed {$halfHoursStr} hrs."
                         );
                     }
                 }
 
-                $employee = Employee::with('shift')->find($request->input('employee_id'));
-                if ($employee && $employee->shift && $inCarbon && $outCarbon) {
-                    $shiftStart = Carbon::parse($employee->shift->shift_start_time);
-                    $shiftEnd = Carbon::parse($employee->shift->shift_end_time);
-                    if ($shiftEnd->lt($shiftStart)) {
-                        $shiftEnd->addDay();
-                    }
-                    $maxShiftMinutes = (int) $shiftStart->diffInMinutes($shiftEnd);
-                    $workedMinutes = (int) $inCarbon->diffInMinutes($outCarbon);
-
-                    if ($workedMinutes > $maxShiftMinutes) {
-                        $maxHoursStr = sprintf('%02d:%02d', intdiv($maxShiftMinutes, 60), $maxShiftMinutes % 60);
-                        $validator->errors()->add(
-                            'out_time',
-                            "Total duration exceeds the assigned shift's maximum allowable duration ({$maxHoursStr} hrs) for '{$employee->shift->shift_name}'."
-                        );
-                    }
+                if ($workedMinutes > $maxShiftMinutes) {
+                    $maxHoursStr = sprintf('%02d:%02d', intdiv($maxShiftMinutes, 60), $maxShiftMinutes % 60);
+                    $validator->errors()->add(
+                        'out_time',
+                        "Total duration exceeds the assigned shift's maximum allowable duration ({$maxHoursStr} hrs) for '{$employee->shift->shift_name}'."
+                    );
                 }
             }
         });
@@ -163,11 +277,11 @@ class EmployeeAttendanceController extends Controller
         $validated = $validator->validated();
         $userId = $request->user()?->id;
 
-        $attendance = DB::transaction(function () use ($validated, $inCarbon, $outCarbon, $userId) {
+        $attendance = DB::transaction(function () use ($validated, $inCarbon, $outCarbon, $attendanceDate, $userId) {
             $attendanceRecord = EmployeeAttendance::firstOrCreate(
                 [
                     'employee_id' => $validated['employee_id'],
-                    'attendance_date' => $validated['attendance_date'],
+                    'attendance_date' => $attendanceDate,
                 ],
                 [
                     'created_by' => $userId,
@@ -180,7 +294,6 @@ class EmployeeAttendanceController extends Controller
                 $attendanceRecord->save();
             }
 
-            // Append new punch details without wiping previous punches
             $detailsData = [];
             if ($inCarbon) {
                 $detailsData[] = [
@@ -204,9 +317,8 @@ class EmployeeAttendanceController extends Controller
                 $attendanceRecord->details()->createMany($detailsData);
             }
 
-            // Recalculate total_working_hours across all punches for this day            
-            self::recalculateWorkingHours($attendanceRecord->id);
-            
+            // Fixed method call
+            $this->recalculateWorkingHours($attendanceRecord->id);
 
             return $attendanceRecord->load(['details', 'employee:id,employee_name,employee_code']);
         });
@@ -255,6 +367,25 @@ class EmployeeAttendanceController extends Controller
             ], 404);
         }
 
+        // Fallback: Agar frontend se direct in_time/out_time bheja gaya ho toh use punches format me map karein
+        if (!$request->has('punches') && $request->filled('in_time') && $request->filled('out_time')) {
+            $existingDetails = $attendance->details()->orderBy('in_out_time', 'asc')->get();
+            $request->merge([
+                'punches' => [
+                    [
+                        'id'         => $existingDetails->get(0)?->id,
+                        'punch_no'   => 1,
+                        'punch_time' => $request->input('in_time'),
+                    ],
+                    [
+                        'id'         => $existingDetails->get(1)?->id,
+                        'punch_no'   => 2,
+                        'punch_time' => $request->input('out_time'),
+                    ],
+                ],
+            ]);
+        }
+
         // Validation
         $validator = Validator::make($request->all(), [
             'employee_id' => 'sometimes|required|integer|exists:employees,id',
@@ -267,12 +398,20 @@ class EmployeeAttendanceController extends Controller
                     ->ignore($attendance->id),
             ],
             'punches' => 'required|array|min:2',
-            'punches.*.id' => 'nullable|integer|exists:employee_attendance_details,id',
-            'punches.*.punch_no' => 'required|integer|min:1',
+            'punches.*.id' => [
+                'nullable',
+                'integer',
+                'distinct',
+                Rule::exists('employee_attendance_details', 'id')->where('employee_attendance_id', $attendance->id),
+            ],
+            'punches.*.punch_no' => 'required|integer|min:1|distinct',
             'punches.*.punch_time' => 'required|string',
         ], [
             'punches.required' => 'At least one punch in and punch out is required.',
             'punches.min'      => 'At least one punch in and punch out is required.',
+            'punches.*.punch_no.distinct' => 'Duplicate punch_no detected in punches list.',
+            'punches.*.id.distinct'       => 'Duplicate punch detail ID detected in punches list.',
+            'punches.*.id.exists'         => 'The selected punch detail ID does not belong to this attendance record.',
         ]);
 
         $attendanceDate = null;
@@ -290,7 +429,58 @@ class EmployeeAttendanceController extends Controller
                 return;
             }
 
+            $targetEmployeeId = (int) $request->input('employee_id', $attendance->employee_id);
+            $duplicateAttendance = EmployeeAttendance::where('employee_id', $targetEmployeeId)
+                ->whereDate('attendance_date', $attendanceDate)
+                ->where('id', '!=', $attendance->id)
+                ->exists();
+
+            if ($duplicateAttendance) {
+                $validator->errors()->add('attendance_date', "Duplicate attendance: An attendance record already exists for this employee on date {$attendanceDate}.");
+                return;
+            }
+
+            $holiday = Holiday::where('is_delete', false)
+                ->where('is_active', true)
+                ->whereDate('holiday_date', $attendanceDate)
+                ->first();
+
+            if ($holiday && $holiday->holiday_type !== 'half day') {
+                $validator->errors()->add('attendance_date', "Attendance cannot be marked on a holiday ({$holiday->holiday_title}).");
+                return;
+            }
+
             $punches = $request->input('punches');
+            $employeeId = $request->input('employee_id', $attendance->employee_id);
+            $employee = Employee::withTrashed()->with(['shift', 'location'])->find($employeeId);
+
+            if (!$employee || $employee->trashed() || (bool) $employee->is_delete) {
+                $validator->errors()->add('employee_id', 'The selected employee has been deleted.');
+                return;
+            }
+
+            if (!(bool) $employee->is_active) {
+                $validator->errors()->add('employee_id', 'The selected employee is inactive and cannot have attendance recorded.');
+                return;
+            }
+
+            if ($employee && !empty($employee->date_of_join) && Carbon::parse($attendanceDate)->lt(Carbon::parse($employee->date_of_join))) {
+                $validator->errors()->add('attendance_date', "Attendance date '{$attendanceDate}' is before the employee's date of join ({$employee->date_of_join}).");
+                return;
+            }
+
+            if ($employee && !empty($employee->date_of_leave) && Carbon::parse($attendanceDate)->gt(Carbon::parse($employee->date_of_leave))) {
+                $validator->errors()->add('attendance_date', "Attendance date '{$attendanceDate}' is after the employee's date of leave ({$employee->date_of_leave}).");
+                return;
+            }
+
+            if ($employee && $this->isEmployeeWeeklyOff($employee, $attendanceDate)) {
+                $dayOfWeek = Carbon::parse($attendanceDate)->format('l');
+                $validator->errors()->add('attendance_date', "Attendance cannot be marked on the employee's weekly off day ({$dayOfWeek}).");
+                return;
+            }
+
+            $shiftBounds = $this->getShiftBounds($employee, $attendanceDate);
 
             if (!is_array($punches) || count($punches) < 2) {
                 $validator->errors()->add('punches', 'At least one punch in and punch out is required.');
@@ -316,6 +506,7 @@ class EmployeeAttendanceController extends Controller
                 $maxPunchNo = max(array_keys($punchesByNo));
                 $totalWorkedMinutes = 0;
                 $lastPunchCarbon = null;
+                $seenPunchDateTimes = [];
 
                 // 2. Validate pairs (1-2, 3-4, 5-6, 7-8...)
                 for ($i = 1; $i <= $maxPunchNo; $i += 2) {
@@ -340,21 +531,78 @@ class EmployeeAttendanceController extends Controller
                             $validator->errors()->add('punches', "Invalid time format for Punch-" . ($i + 1) . ": '{$outTimeStr}'.");
                         }
 
-                        // Advance in_time if previous punch pair already crossed midnight
-                        if ($inCarbon && $lastPunchCarbon && $inCarbon->lt($lastPunchCarbon) && !preg_match('/^\d{4}-\d{2}-\d{2}/', $inTimeStr)) {
-                            $inCarbon->addDay();
-                        }
+                        if ($inCarbon && $outCarbon) {
+                            $isPairDuplicate = false;
 
-                        // Auto-advance out_time to next day if overnight shift is detected
-                        if ($inCarbon && $outCarbon && $outCarbon->lt($inCarbon) && !preg_match('/^\d{4}-\d{2}-\d{2}/', $outTimeStr)) {
-                            $outCarbon->addDay();
-                        }
+                            if ($inCarbon->eq($outCarbon)) {
+                                $validator->errors()->add('punches', "Duplicate punch: Punch-{$i} and Punch-" . ($i + 1) . " have the same time ({$inTimeStr}).");
+                                $isPairDuplicate = true;
+                            }
 
-                        if ($inCarbon && $outCarbon && $outCarbon->lt($inCarbon)) {
-                            $validator->errors()->add('punches', "Punch-" . ($i + 1) . " ({$outTimeStr}) cannot be earlier than Punch-{$i} ({$inTimeStr}).");
+                            // Advance in_time if previous punch pair already crossed midnight
+                            if ($lastPunchCarbon && $inCarbon->lt($lastPunchCarbon) && !preg_match('/^\d{4}-\d{2}-\d{2}/', $inTimeStr)) {
+                                $inCarbon->addDay();
+                            }
+
+                            $isSequentialDuplicate = false;
+                            if ($lastPunchCarbon && $inCarbon->lte($lastPunchCarbon)) {
+                                if ($inCarbon->eq($lastPunchCarbon)) {
+                                    $validator->errors()->add('punches', "Duplicate punch: Punch-{$i} ({$inTimeStr}) is identical to Punch-" . ($i - 1) . " ({$lastPunchCarbon->format('H:i:s')}).");
+                                    $isSequentialDuplicate = true;
+                                } else {
+                                    $validator->errors()->add('punches', "Punch-{$i} ({$inTimeStr}) must be greater than Punch-" . ($i - 1) . " ({$lastPunchCarbon->format('H:i:s')}).");
+                                }
+                            }
+
+                            // Auto-advance out_time to next day if overnight shift is detected
+                            if ($outCarbon->lt($inCarbon) && !preg_match('/^\d{4}-\d{2}-\d{2}/', $outTimeStr)) {
+                                $outCarbon->addDay();
+                            }
+
+                            if ($outCarbon->lte($inCarbon) && !$isPairDuplicate) {
+                                $validator->errors()->add('punches', "Punch-" . ($i + 1) . " ({$outTimeStr}) must be greater than Punch-{$i} ({$inTimeStr}).");
+                            }
+
+                            $inFormatted = $inCarbon->format('Y-m-d H:i:s');
+                            $outFormatted = $outCarbon->format('Y-m-d H:i:s');
+
+                            // Avoid double error reporting if already reported as duplicate above
+                            if (!$isSequentialDuplicate) {
+                                if (isset($seenPunchDateTimes[$inFormatted])) {
+                                    $prevPunchNo = $seenPunchDateTimes[$inFormatted];
+                                    $validator->errors()->add('punches', "Duplicate punch: Punch-{$i} has the same time ({$inTimeStr}) as Punch-{$prevPunchNo}.");
+                                } else {
+                                    $seenPunchDateTimes[$inFormatted] = $i;
+                                }
+                            }
+
+                            if (!$isPairDuplicate) {
+                                if (isset($seenPunchDateTimes[$outFormatted])) {
+                                    $prevPunchNo = $seenPunchDateTimes[$outFormatted];
+                                    $validator->errors()->add('punches', "Duplicate punch: Punch-" . ($i + 1) . " has the same time ({$outTimeStr}) as Punch-{$prevPunchNo}.");
+                                } else {
+                                    $seenPunchDateTimes[$outFormatted] = $i + 1;
+                                }
+                            }
                         }
 
                         if ($inCarbon && $outCarbon) {
+                            if ($shiftBounds) {
+                                [$shiftStart, $shiftEnd] = $shiftBounds;
+                                if ($inCarbon->lt($shiftStart) || $inCarbon->gt($shiftEnd)) {
+                                    $validator->errors()->add(
+                                        'punches',
+                                        "Punch-{$i} ({$inTimeStr}) is outside the assigned shift ({$shiftStart->format('Y-m-d H:i:s')} - {$shiftEnd->format('Y-m-d H:i:s')})."
+                                    );
+                                }
+                                if ($outCarbon->lt($shiftStart) || $outCarbon->gt($shiftEnd)) {
+                                    $validator->errors()->add(
+                                        'punches',
+                                        "Punch-" . ($i + 1) . " ({$outTimeStr}) is outside the assigned shift ({$shiftStart->format('Y-m-d H:i:s')} - {$shiftEnd->format('Y-m-d H:i:s')})."
+                                    );
+                                }
+                            }
+
                             $totalWorkedMinutes += (int) $inCarbon->diffInMinutes($outCarbon);
                             $lastPunchCarbon = clone $outCarbon;
 
@@ -372,15 +620,21 @@ class EmployeeAttendanceController extends Controller
 
                 // Validate total worked duration against employee's assigned shift
                 if ($validator->errors()->isEmpty()) {
-                    $employeeId = $request->input('employee_id', $attendance->employee_id);
-                    $employee = Employee::with('shift')->find($employeeId);
-                    if ($employee && $employee->shift && $employee->shift->shift_start_time && $employee->shift->shift_end_time) {
-                        $shiftStart = Carbon::parse($employee->shift->shift_start_time);
-                        $shiftEnd = Carbon::parse($employee->shift->shift_end_time);
-                        if ($shiftEnd->lt($shiftStart)) {
-                            $shiftEnd->addDay();
-                        }
+                    if ($shiftBounds && $employee && $employee->shift) {
+                        [$shiftStart, $shiftEnd] = $shiftBounds;
                         $maxShiftMinutes = (int) $shiftStart->diffInMinutes($shiftEnd);
+
+                        if ($holiday && $holiday->holiday_type === 'half day') {
+                            $halfDayMaxMinutes = (int) ($maxShiftMinutes / 2);
+                            if ($totalWorkedMinutes > $halfDayMaxMinutes) {
+                                $halfHoursStr = sprintf('%02d:%02d', intdiv($halfDayMaxMinutes, 60), $halfDayMaxMinutes % 60);
+                                $validator->errors()->add(
+                                    'punches',
+                                    "On a half-day holiday ({$holiday->holiday_title}), total worked duration cannot exceed {$halfHoursStr} hrs."
+                                );
+                            }
+                        }
+
                         if ($totalWorkedMinutes > $maxShiftMinutes) {
                             $maxHoursStr = sprintf('%02d:%02d', intdiv($maxShiftMinutes, 60), $maxShiftMinutes % 60);
                             $validator->errors()->add(
@@ -569,7 +823,7 @@ class EmployeeAttendanceController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($import->errors()),
                     'errors'       => $import->errors(),
-                    'errors_url'   => route('employee-attendances.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('employee-attendances.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }
@@ -660,6 +914,74 @@ class EmployeeAttendanceController extends Controller
         return preg_match('/^\d{4}-\d{2}-\d{2}/', $time)
             ? Carbon::parse($time)
             : Carbon::parse("{$date} {$time}");
+    }
+
+    /**
+     * Get the employee's shift bounds for an attendance date.
+     *
+     * @return array{0: Carbon, 1: Carbon}|null
+     */
+    private function getShiftBounds(?Employee $employee, string $attendanceDate): ?array
+    {
+        if (
+            !$employee
+            || !$employee->shift
+            || !$employee->shift->shift_start_time
+            || !$employee->shift->shift_end_time
+        ) {
+            return null;
+        }
+
+        $shiftStartTime = Carbon::parse($employee->shift->shift_start_time)->format('H:i:s');
+        $shiftEndTime = Carbon::parse($employee->shift->shift_end_time)->format('H:i:s');
+        $shiftStart = Carbon::parse("{$attendanceDate} {$shiftStartTime}");
+        $shiftEnd = Carbon::parse("{$attendanceDate} {$shiftEndTime}");
+
+        if ($shiftEnd->lt($shiftStart)) {
+            $shiftEnd->addDay();
+        }
+
+        return [$shiftStart, $shiftEnd];
+    }
+
+    /**
+     * Check if a given date is a weekly off day for the employee.
+     * Checks employee-specific weekly off, StoreWeeklyOff, and location weekly off.
+     */
+    private function isEmployeeWeeklyOff(Employee $employee, string $attendanceDate): bool
+    {
+        $dayOfWeek = strtolower(Carbon::parse($attendanceDate)->format('l'));
+
+        // 1. Direct employee weekly off check
+        if (!empty($employee->weekly_off)) {
+            $weeklyOffDays = array_map('trim', explode(',', strtolower($employee->weekly_off)));
+            if (in_array($dayOfWeek, $weeklyOffDays, true)) {
+                return true;
+            }
+        }
+
+        // 2. Store & Location weekly off check
+        if ($employee->location_id) {
+            $storeWeeklyOff = StoreWeeklyOff::where('location_id', $employee->location_id)
+                ->where('is_active', true)
+                ->where('is_delete', false)
+                ->whereRaw('LOWER(weekly_off_day) = ?', [$dayOfWeek])
+                ->exists();
+
+            if ($storeWeeklyOff) {
+                return true;
+            }
+
+            $location = $employee->relationLoaded('location') ? $employee->location : $employee->location()->first();
+            if ($location && !empty($location->weekly_off_day)) {
+                $locationDays = array_map('trim', explode(',', strtolower($location->weekly_off_day)));
+                if (in_array($dayOfWeek, $locationDays, true)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

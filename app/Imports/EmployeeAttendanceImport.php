@@ -6,6 +6,8 @@ use App\Http\Traits\HandlesImport;
 use App\Models\Employee;
 use App\Models\EmployeeAttendance;
 use App\Models\EmployeeAttendanceDetail;
+use App\Models\Holiday;
+use App\Models\StoreWeeklyOff;
 use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
@@ -43,6 +45,13 @@ class EmployeeAttendanceImport
      * @var array<int, string>
      */
     protected array $fileHeaders = [];
+
+    /**
+     * Cache for store weekly offs by location ID.
+     *
+     * @var array<int, array<string>>
+     */
+    protected array $storeWeeklyOffCache = [];
 
     /**
      * Main import function to process the uploaded CSV file.
@@ -111,6 +120,7 @@ class EmployeeAttendanceImport
             $rowNumber = 1;
             $importedRecords = [];
             $employeeCache = [];
+            $holidayCache = [];
             $userId = Auth::id();
             $maxPunchNumber = !empty($punchColumns) ? max(array_keys($punchColumns)) : 0;
 
@@ -124,8 +134,9 @@ class EmployeeAttendanceImport
                 }
 
                 $dateVal = $data['date'] ?? '';
-                $empCode = $data['employee_code'] ?? '';
-                $uniqueKey = strtolower($empCode) . '_' . $dateVal;
+                $empCode = trim((string) ($data['employee_code'] ?? ''));
+                $lowerEmpCode = mb_strtolower($empCode);
+                $uniqueKey = $lowerEmpCode . '_' . $dateVal;
 
                 // Basic validation for date and employee code
                 $validator = Validator::make([
@@ -152,22 +163,103 @@ class EmployeeAttendanceImport
                     continue;
                 }
 
-                // 5. In-Memory Employee Cache Lookup
-                if (!array_key_exists($empCode, $employeeCache)) {
-                    $employeeCache[$empCode] = Employee::with('shift')->where('employee_code', $empCode)->first();
+                $formattedDate = date('Y-m-d', strtotime($dateVal));
+
+                // Holiday Check
+                if (!array_key_exists($formattedDate, $holidayCache)) {
+                    $holidayCache[$formattedDate] = Holiday::where('is_delete', false)
+                        ->where('is_active', true)
+                        ->whereDate('holiday_date', $formattedDate)
+                        ->first();
                 }
 
-                $employee = $employeeCache[$empCode];
+                $holiday = $holidayCache[$formattedDate];
+
+                if ($holiday) {
+                    $this->addError($rowNumber, $data, ["Attendance cannot be marked on a holiday ({$holidayCache[$formattedDate]->holiday_title})."]);
+                    continue;
+                }
+
+                // 5. In-Memory Employee Cache Lookup
+                if (!array_key_exists($lowerEmpCode, $employeeCache)) {
+                    $employeeCache[$lowerEmpCode] = Employee::withTrashed()
+                        ->with(['shift', 'location'])
+                        ->whereRaw('LOWER(employee_code) = ?', [$lowerEmpCode])
+                        ->first();
+                }
+
+                $employee = $employeeCache[$lowerEmpCode];
                 if (!$employee) {
                     $this->addError($rowNumber, $data, ["Employee with code '{$empCode}' does not exist."]);
                     continue;
                 }
+               
 
-                $formattedDate = date('Y-m-d', strtotime($dateVal));
+                if ($employee->trashed() || (bool) $employee->is_delete) {
+                    $this->addError($rowNumber, $data, ["Employee with code '{$empCode}' has been deleted."]);
+                    continue;
+                }
+
+                if (!(bool) $employee->is_active) {
+                    $this->addError($rowNumber, $data, ["Employee with code '{$empCode}' is inactive and cannot have attendance recorded."]);
+                    continue;
+                }
+
+                if (!empty($employee->date_of_join) && Carbon::parse($formattedDate)->lt(Carbon::parse($employee->date_of_join))) {
+                    $this->addError($rowNumber, $data, ["Attendance date '{$formattedDate}' is before the employee's date of join ({$employee->date_of_join})."]);
+                    continue;
+                }
+
+                if (!empty($employee->date_of_leave) && Carbon::parse($formattedDate)->gt(Carbon::parse($employee->date_of_leave))) {
+                    $this->addError($rowNumber, $data, ["Attendance date '{$formattedDate}' is after the employee's date of leave ({$employee->date_of_leave})."]);
+                    continue;
+                }
+
+                if ($this->isEmployeeWeeklyOff($employee, $formattedDate)) {
+                    $dayOfWeek = Carbon::parse($formattedDate)->format('l');
+                    $this->addError($rowNumber, $data, ["Attendance cannot be marked on the employee's weekly off day ({$dayOfWeek})."]);
+                    continue;
+                }
+
                 $punchErrors = [];
                 $punchTimestamps = [];
                 $punchDateTimes = [];
                 $lastPunchTs = null;
+                $shiftStart = null;
+                $shiftEnd = null;
+
+                if (
+                    $employee->shift
+                    && $employee->shift->shift_start_time
+                    && $employee->shift->shift_end_time
+                ) {
+                    $shiftStartTime = Carbon::parse($employee->shift->shift_start_time)->format('H:i:s');
+                    $shiftEndTime = Carbon::parse($employee->shift->shift_end_time)->format('H:i:s');
+                    $shiftStart = Carbon::parse("{$formattedDate} {$shiftStartTime}");
+                    $shiftEnd = Carbon::parse("{$formattedDate} {$shiftEndTime}");
+
+                    if ($shiftEnd->lt($shiftStart)) {
+                        $shiftEnd->addDay();
+                    }
+                }
+
+                // Check existing attendance and punches in database for this employee and date
+                $existingAttendance = EmployeeAttendance::with('details')
+                    ->where('employee_id', $employee->id)
+                    ->whereDate('attendance_date', $formattedDate)
+                    ->first();
+
+                $existingPunches = [];
+                $existingPunchTimes = [];
+
+                if ($existingAttendance && $existingAttendance->details->isNotEmpty()) {
+                    $existingPunches = $existingAttendance->details
+                        ->map(fn ($d) => Carbon::parse($d->in_out_time)->format('Y-m-d H:i:s'))
+                        ->all();
+                    $existingPunchTimes = $existingAttendance->details
+                        ->map(fn ($d) => Carbon::parse($d->in_out_time)->format('H:i:s'))
+                        ->all();
+                }
 
                 // 6. Row-Level Punch Pair & Time Validation
                 for ($i = 1; $i <= $maxPunchNumber; $i += 2) {
@@ -201,9 +293,19 @@ class EmployeeAttendanceImport
                         }
 
                         if ($tsIn !== false && $tsOut !== false) {
+                            if ($tsIn === $tsOut) {
+                                $punchErrors[] = "Duplicate punch: {$inHeader} and {$outHeader} have the same time '{$valIn}'.";
+                            }
+
                             // If previous punch pair crossed midnight, advance subsequent punch in-time
                             if ($lastPunchTs !== null && $tsIn < $lastPunchTs && !preg_match('/^\d{4}-\d{2}-\d{2}/', $valIn)) {
                                 $tsIn = strtotime('+1 day', $tsIn);
+                            }
+
+                            if ($lastPunchTs !== null && $tsIn <= $lastPunchTs) {
+                                $punchErrors[] = $tsIn === $lastPunchTs
+                                    ? "Duplicate punch: {$inHeader} ('{$valIn}') is identical to the previous punch out time."
+                                    : "{$inHeader} ('{$valIn}') must be greater than the previous punch out time.";
                             }
 
                             // Auto-advance out-time to next day if overnight shift is detected
@@ -211,12 +313,46 @@ class EmployeeAttendanceImport
                                 $tsOut = strtotime('+1 day', $tsOut);
                             }
 
+                            if ($shiftStart && $shiftEnd) {
+                                if ($tsIn < $shiftStart->timestamp || $tsIn > $shiftEnd->timestamp) {
+                                    $punchErrors[] = "{$inHeader} ({$valIn}) is outside the assigned shift ({$shiftStart->format('Y-m-d H:i:s')} - {$shiftEnd->format('Y-m-d H:i:s')}).";
+                                }
+                                if ($tsOut < $shiftStart->timestamp || $tsOut > $shiftEnd->timestamp) {
+                                    $punchErrors[] = "{$outHeader} ({$valOut}) is outside the assigned shift ({$shiftStart->format('Y-m-d H:i:s')} - {$shiftEnd->format('Y-m-d H:i:s')}).";
+                                }
+                            }
+
                             if ($tsOut <= $tsIn) {
                                 $punchErrors[] = "{$outHeader} ({$valOut}) must be greater than {$inHeader} ({$valIn}).";
-                            } else {
+                            }
+
+                            $formattedTsIn = date('Y-m-d H:i:s', $tsIn);
+                            $formattedTsOut = date('Y-m-d H:i:s', $tsOut);
+                            $timeIn = date('H:i:s', $tsIn);
+                            $timeOut = date('H:i:s', $tsOut);
+
+                            $inDbDuplicate = in_array($formattedTsIn, $existingPunches, true) || in_array($timeIn, $existingPunchTimes, true);
+                            $outDbDuplicate = in_array($formattedTsOut, $existingPunches, true) || in_array($timeOut, $existingPunchTimes, true);
+
+                            if ($inDbDuplicate && $outDbDuplicate) {
+                                $punchErrors[] = "Duplicate punch: Both {$inHeader} ('{$valIn}') and {$outHeader} ('{$valOut}') already exist in database on date {$formattedDate}.";
+                            } elseif ($inDbDuplicate) {
+                                $punchErrors[] = "Duplicate punch: {$inHeader} ('{$valIn}') already exists in database on date {$formattedDate}.";
+                            } elseif ($outDbDuplicate) {
+                                $punchErrors[] = "Duplicate punch: {$outHeader} ('{$valOut}') already exists in database on date {$formattedDate}.";
+                            }
+
+                            if (in_array($formattedTsIn, $punchDateTimes, true)) {
+                                $punchErrors[] = "Duplicate punch: {$inHeader} ('{$valIn}') is repeated on date {$formattedDate}.";
+                            }
+                            if (in_array($formattedTsOut, $punchDateTimes, true)) {
+                                $punchErrors[] = "Duplicate punch: {$outHeader} ('{$valOut}') is repeated on date {$formattedDate}.";
+                            }
+
+                            if (empty($punchErrors)) {
                                 $punchTimestamps[] = ['in' => $tsIn, 'out' => $tsOut];
-                                $punchDateTimes[] = date('Y-m-d H:i:s', $tsIn);
-                                $punchDateTimes[] = date('Y-m-d H:i:s', $tsOut);
+                                $punchDateTimes[] = $formattedTsIn;
+                                $punchDateTimes[] = $formattedTsOut;
                                 $lastPunchTs = $tsOut;
                             }
                         }
@@ -241,13 +377,19 @@ class EmployeeAttendanceImport
                         $totalMinutes += (int) (($pair['out'] - $pair['in']) / 60);
                     }
 
-                    if ($employee->shift) {
-                        $shiftStart = Carbon::parse($employee->shift->shift_start_time);
-                        $shiftEnd = Carbon::parse($employee->shift->shift_end_time);
-                        if ($shiftEnd->lt($shiftStart)) {
-                            $shiftEnd->addDay();
-                        }
+                    if ($shiftStart && $shiftEnd) {
                         $maxShiftMinutes = (int) $shiftStart->diffInMinutes($shiftEnd);
+
+                        if ($holiday && $holiday->holiday_type === 'half day') {
+                            $halfDayMaxMinutes = (int) ($maxShiftMinutes / 2);
+                            if ($totalMinutes > $halfDayMaxMinutes) {
+                                $halfHoursStr = sprintf('%02d:%02d', intdiv($halfDayMaxMinutes, 60), $halfDayMaxMinutes % 60);
+                                $this->addError($rowNumber, $data, [
+                                    "On a half-day holiday ({$holiday->holiday_title}), total worked duration cannot exceed {$halfHoursStr} hrs."
+                                ]);
+                                continue;
+                            }
+                        }
 
                         if ($totalMinutes > $maxShiftMinutes) {
                             $maxHoursStr = sprintf('%02d:%02d', intdiv($maxShiftMinutes, 60), $maxShiftMinutes % 60);
@@ -403,5 +545,46 @@ class EmployeeAttendanceImport
             'data'   => $data,
         ];
         $this->rawFailedRows[] = array_merge(array_values($data), [implode('; ', $messages)]);
+    }
+
+    /**
+     * Check if a given date is a weekly off day for the employee.
+     */
+    private function isEmployeeWeeklyOff(Employee $employee, string $formattedDate): bool
+    {
+        $dayOfWeek = strtolower(Carbon::parse($formattedDate)->format('l'));
+
+        // 1. Direct employee weekly off check
+        if (!empty($employee->weekly_off)) {
+            $weeklyOffDays = array_map('trim', explode(',', strtolower($employee->weekly_off)));
+            if (in_array($dayOfWeek, $weeklyOffDays, true)) {
+                return true;
+            }
+        }
+
+        // 2. Store & Location weekly off check (cached for bulk performance)
+        if ($employee->location_id) {
+            if (!array_key_exists($employee->location_id, $this->storeWeeklyOffCache)) {
+                $locationOffs = StoreWeeklyOff::where('location_id', $employee->location_id)
+                    ->where('is_active', true)
+                    ->where('is_delete', false)
+                    ->pluck('weekly_off_day')
+                    ->map(fn ($d) => strtolower(trim($d)))
+                    ->all();
+
+                if ($employee->location && !empty($employee->location->weekly_off_day)) {
+                    $locDays = array_map('trim', explode(',', strtolower($employee->location->weekly_off_day)));
+                    $locationOffs = array_unique(array_merge($locationOffs, $locDays));
+                }
+
+                $this->storeWeeklyOffCache[$employee->location_id] = $locationOffs;
+            }
+
+            if (in_array($dayOfWeek, $this->storeWeeklyOffCache[$employee->location_id], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

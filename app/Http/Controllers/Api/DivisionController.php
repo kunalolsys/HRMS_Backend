@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Exports\DivisionExport;
 use App\Imports\DivisionImport;
 use App\Models\BrandDivision;
@@ -17,17 +18,18 @@ use Illuminate\Validation\Validator as ValidatorContract;
 
 class DivisionController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
 
     function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:division-view|division-create|division-edit|division-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:division-create', ['only' => ['store', 'import']]);
         $this->middleware('permission:division-edit', ['only' => ['update']]);
         $this->middleware('permission:division-delete', ['only' => ['destroy']]);
         $this->middleware('permission:division-restore', ['only' => ['restore']]);
         $this->middleware('permission:division-export', ['only' => ['export']]);
-        $this->middleware('permission:division-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:division-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
 
     public function import(Request $request)
@@ -55,7 +57,7 @@ class DivisionController extends Controller
                     'imported' => $imported,
                     'failed' => count($divisionImport->errors()),
                     'errors' => $divisionImport->errors(),
-                    'errors_url' => route('divisions.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url' => $this->generateImportErrorsUrl('divisions.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

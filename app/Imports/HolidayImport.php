@@ -97,8 +97,7 @@ class HolidayImport
                 } else {
                     $seenDates[$formattedDate] = true;
 
-                    $alreadyExists = Holiday::where('is_delete', false)
-                        ->whereDate('holiday_date', $formattedDate)
+                    $alreadyExists = Holiday::whereDate('holiday_date', $formattedDate)
                         ->exists();
 
                     if ($alreadyExists) {

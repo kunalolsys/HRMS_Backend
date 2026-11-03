@@ -13,6 +13,15 @@ use Illuminate\Database\QueryException;
 use DB;
 class PermissionController extends Controller
 {
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum');
+        $this->middleware('permission:permission-view|permission-create|permission-edit|permission-delete', ['only' => ['index', 'show', 'getUserPermissions', 'getGroupedPermissions']]);
+        $this->middleware('permission:permission-create', ['only' => ['store']]);
+        $this->middleware('permission:permission-edit', ['only' => ['update', 'updateByTitleName', 'syncRoles', 'assignUserPermissions']]);
+        $this->middleware('permission:permission-delete', ['only' => ['destroy', 'softDeleteByTitle']]);
+    }
+
     public function index(Request $request)
     {
         try {

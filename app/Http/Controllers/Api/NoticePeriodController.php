@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\NoticePeriodExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\NoticePeriodImport;
 use App\Models\Designation;
 use App\Models\Employee;
@@ -17,16 +18,18 @@ use Illuminate\Validation\Rule;
 
 class NoticePeriodController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
     function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:notice_period-view|notice_period-create|notice_period-edit|notice_period-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:notice_period-create', ['only' => ['store']]);
         $this->middleware('permission:notice_period-edit', ['only' => ['update']]);
         $this->middleware('permission:notice_period-delete', ['only' => ['destroy']]);
         $this->middleware('permission:notice_period-restore', ['only' => ['restore']]);
         $this->middleware('permission:notice_period-export', ['only' => ['export']]);
-        $this->middleware('permission:notice_period-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:notice_period-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
     /**
      * Import notice periods from a CSV file.
@@ -57,7 +60,7 @@ class NoticePeriodController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($import->errors()),
                     'errors'       => $import->errors(),
-                    'errors_url'   => route('notice-periods.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('notice-periods.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

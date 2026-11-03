@@ -26,6 +26,52 @@ use Illuminate\Support\Facades\DB;
 
 class DropdownController extends Controller
 {
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum');
+
+        // Restrict sensitive metadata dropdowns to users with role/permission or user management rights
+        $this->middleware('permission:role-view|role-create|role-edit|permission-view|permission-create|permission-edit', [
+            'only' => ['roles', 'permissions', 'getUsers'],
+        ]);
+        $this->middleware('permission:user-view|user-create|user-edit', ['only' => ['users']]);
+
+        // Master dropdown permissions: allows users with master view rights or operational create/edit rights
+        $this->middleware('permission:brand-view|brand-create|brand-edit|employee-create|employee-edit|vendor-create|vendor-edit', [
+            'only' => ['brands', 'vendors', 'vendorsByBrand'],
+        ]);
+        $this->middleware('permission:company-view|company-create|company-edit|employee-create|employee-edit', [
+            'only' => ['companies'],
+        ]);
+        $this->middleware('permission:location-view|location-create|location-edit|employee-create|employee-edit', [
+            'only' => ['locations'],
+        ]);
+        $this->middleware('permission:division-view|division-create|division-edit|brand-create|brand-edit|employee-create|employee-edit', [
+            'only' => ['divisions'],
+        ]);
+        $this->middleware('permission:designation-view|designation-create|designation-edit|notice_period-create|notice_period-edit|shift-create|shift-edit|employee-create|employee-edit', [
+            'only' => ['designations'],
+        ]);
+        $this->middleware('permission:shift-view|shift-create|shift-edit|employee-create|employee-edit|employee_attendance-create|employee_attendance-edit', [
+            'only' => ['shifts'],
+        ]);
+        $this->middleware('permission:cost_center-view|cost_center-create|cost_center-edit|location-create|location-edit', [
+            'only' => ['costCenters'],
+        ]);
+        $this->middleware('permission:notice_period-view|notice_period-create|notice_period-edit|employee-create|employee-edit', [
+            'only' => ['noticePeriods'],
+        ]);
+        $this->middleware('permission:department-view|department-create|department-edit|employee-create|employee-edit', [
+            'only' => ['departments'],
+        ]);
+        $this->middleware('permission:employee-view|employee-create|employee-edit|employee_attendance-view|employee_attendance-create|employee_attendance-edit', [
+            'only' => ['employees'],
+        ]);
+        $this->middleware('permission:holiday-view|holiday-create|holiday-edit|employee-view|employee_attendance-view|employee_attendance-create', [
+            'only' => ['holidays'],
+        ]);
+    }
+
     /**
      * Get active, non-deleted brands for dropdowns.
      */

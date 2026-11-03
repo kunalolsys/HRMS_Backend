@@ -11,6 +11,14 @@ use Illuminate\Validation\Rule;
 
 class PermissionAssignmentController extends Controller
 {
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum');
+        $this->middleware('permission:role-edit', ['only' => ['syncRolePermissions']]);
+        $this->middleware('permission:role-edit|user-edit', ['only' => ['syncUserRoles']]);
+        $this->middleware('permission:permission-edit', ['only' => ['syncUserDirectPermissions', 'syncUserPermissions']]);
+    }
+
     /**
      * Assign/Sync permissions to a specific role.
      *

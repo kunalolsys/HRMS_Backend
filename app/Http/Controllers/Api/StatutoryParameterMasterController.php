@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\StatutoryParameterMasterExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\StatutoryParameterMasterImport;
 use App\Models\StatutoryParameterMaster;
 use Illuminate\Contracts\Validation\Validator as ValidatorContract;
@@ -17,18 +18,20 @@ use Illuminate\Support\Facades\Validator;
 
 class StatutoryParameterMasterController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
     private const DEFAULT_EFFECTIVE_TO = '2099-12-31';
 
     public function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:statutory_parameter_master-view|statutory-parameter-master-create|statutory_parameter_master-edit|statutory_parameter_master-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:statutory_parameter_master-create', ['only' => ['store']]);
         $this->middleware('permission:statutory_parameter_master-edit', ['only' => ['update']]);
         $this->middleware('permission:statutory_parameter_master-delete', ['only' => ['destroy']]);
         $this->middleware('permission:statutory_parameter_master-restore', ['only' => ['restore']]);
         $this->middleware('permission:statutory_parameter_master-export', ['only' => ['export']]);
-        $this->middleware('permission:statutory_parameter_master-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:statutory_parameter_master-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
 
     /**
@@ -306,7 +309,7 @@ class StatutoryParameterMasterController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($import->errors()),
                     'errors'       => $import->errors(),
-                    'errors_url'   => route('statutory-parameter-masters.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('statutory-parameter-masters.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

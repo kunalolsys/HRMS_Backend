@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\MinimumWageMasterExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\MinimumWageMasterImport;
 use App\Models\MinimumWageMaster;
 use Illuminate\Contracts\Validation\Validator as ValidatorContract;
@@ -17,6 +18,19 @@ use Illuminate\Support\Facades\Validator;
 
 class MinimumWageMasterController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
+        $this->middleware('permission:minimum-wage-view|minimum-wage-create|minimum-wage-edit|minimum-wage-delete', ['only' => ['index', 'show']]);
+        $this->middleware('permission:minimum-wage-create', ['only' => ['store']]);
+        $this->middleware('permission:minimum-wage-edit', ['only' => ['update']]);
+        $this->middleware('permission:minimum-wage-delete', ['only' => ['destroy']]);
+        $this->middleware('permission:minimum-wage-restore', ['only' => ['restore']]);
+        $this->middleware('permission:minimum-wage-export', ['only' => ['export']]);
+        $this->middleware('permission:minimum-wage-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
+    }
     /**
      * Display a listing of minimum wage masters.
      */
@@ -310,7 +324,7 @@ class MinimumWageMasterController extends Controller
                     'imported'     => $imported,
                     'failed'       => count($import->errors()),
                     'errors'       => $import->errors(),
-                    'errors_url'   => route('minimum-wage-masters.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url'   => $this->generateImportErrorsUrl('minimum-wage-masters.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

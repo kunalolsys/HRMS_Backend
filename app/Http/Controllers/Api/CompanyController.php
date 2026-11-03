@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Exports\CompanyExport;
 use App\Imports\CompanyImport;
 use App\Models\Company;
@@ -18,17 +19,18 @@ use Illuminate\Validation\Validator as ValidatorContract;
 
 class CompanyController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
 
     function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:company-view|company-create|company-edit|company-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:company-create', ['only' => ['store']]);
         $this->middleware('permission:company-edit', ['only' => ['update']]);
         $this->middleware('permission:company-delete', ['only' => ['destroy']]);
         $this->middleware('permission:company-restore', ['only' => ['restore']]);
         $this->middleware('permission:company-export', ['only' => ['export']]);
-        $this->middleware('permission:company-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:company-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
 
     public function import(Request $request)
@@ -56,7 +58,7 @@ class CompanyController extends Controller
                     'imported' => $imported,
                     'failed' => count($companyImport->errors()),
                     'errors' => $companyImport->errors(),
-                    'errors_url' => route('companies.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url' => $this->generateImportErrorsUrl('companies.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

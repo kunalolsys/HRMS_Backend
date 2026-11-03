@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Exports\DesignationExport;
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Imports\DesignationImport;
 use App\Models\Designation;
 use App\Models\Employee;
@@ -16,16 +17,18 @@ use Illuminate\Support\Facades\Validator;
 
 class DesignationController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
+
     function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:designation-view|designation-create|designation-edit|designation-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:designation-create', ['only' => ['store']]);
         $this->middleware('permission:designation-edit', ['only' => ['update']]);
         $this->middleware('permission:designation-delete', ['only' => ['destroy']]);
         $this->middleware('permission:designation-restore', ['only' => ['restore']]);
         $this->middleware('permission:designation-export', ['only' => ['export']]);
-        $this->middleware('permission:designation-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:designation-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
     /**
      * Display a listing of the resource.
@@ -337,7 +340,7 @@ class DesignationController extends Controller
                     'imported' => $imported,
                     'failed' => count($designationImport->errors()),
                     'errors' => $designationImport->errors(),
-                    'errors_url' => route('designations.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url' => $this->generateImportErrorsUrl('designations.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

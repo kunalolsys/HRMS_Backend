@@ -23,8 +23,7 @@ class PermissionTitleSeeder extends Seeder
             'documents',
             'attendance',
             'leave',
-            'payroll',
-            'departments',
+            'payroll',           
             'performance',
             'recruitment',
             'communications',
@@ -49,8 +48,11 @@ class PermissionTitleSeeder extends Seeder
             'late_deduction_slab',
             'notice_period',
             'statutory_parameter_master',
+            'minimum-wage',
+            'short_leave_deduction_slab',
             'employee_attendance',
             'holiday',
+
         ]);
 
         foreach ($titles as $title) {

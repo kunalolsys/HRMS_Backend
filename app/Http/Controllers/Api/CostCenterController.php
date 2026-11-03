@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Traits\GeneratesSignedImportErrorUrl;
 use App\Exports\CostCenterExport;
 use App\Imports\CostCenterImport;
 use App\Models\CostCenter;
@@ -19,17 +20,18 @@ use Illuminate\Validation\Validator as ValidatorContract;
 
 class CostCenterController extends Controller
 {
+    use GeneratesSignedImportErrorUrl;
 
     function __construct()
     {
-        $this->middleware('auth:sanctum');
+        $this->middleware('auth:sanctum', ['except' => ['importErrors']]);
         $this->middleware('permission:cost_center-view|cost_center-create|cost_center-edit|cost_center-delete', ['only' => ['index', 'show']]);
         $this->middleware('permission:cost_center-create', ['only' => ['store', 'import']]);
         $this->middleware('permission:cost_center-edit', ['only' => ['update']]);
         $this->middleware('permission:cost_center-delete', ['only' => ['destroy']]);
         $this->middleware('permission:cost_center-restore', ['only' => ['restore']]);
         $this->middleware('permission:cost_center-export', ['only' => ['export']]);
-        $this->middleware('permission:cost_center-import', ['only' => ['import', 'importTemplate', 'importErrors', 'importStructure']]);
+        $this->middleware('permission:cost_center-import', ['only' => ['import', 'importTemplate', 'importStructure']]);
     }
 
     public function import(Request $request)
@@ -57,7 +59,7 @@ class CostCenterController extends Controller
                     'imported' => $imported,
                     'failed' => count($costCenterImport->errors()),
                     'errors' => $costCenterImport->errors(),
-                    'errors_url' => route('cost-centers.import.errors', ['filename' => basename($errorFile)]),
+                    'errors_url' => $this->generateImportErrorsUrl('cost-centers.import.errors', $errorFile),
                     'template_url' => $templateUrl,
                 ], 422);
             }

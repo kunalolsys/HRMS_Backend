@@ -15,6 +15,15 @@ use Illuminate\Contracts\Validation\Validator as ValidatorContract;
 
 class RoleController extends Controller
 {
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum');
+        $this->middleware('permission:role-view|role-create|role-edit|role-delete', ['only' => ['index', 'show', 'getPermissions']]);
+        $this->middleware('permission:role-create', ['only' => ['store']]);
+        $this->middleware('permission:role-edit', ['only' => ['update', 'syncPermissions', 'syncRolePermissions']]);
+        $this->middleware('permission:role-delete', ['only' => ['destroy']]);
+    }
+
     public function index(Request $request)
     {
         try {
